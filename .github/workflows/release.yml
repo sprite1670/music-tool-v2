@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'windows-2022'
+            args: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: music-tool-v2/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: 'x86_64-pc-windows-msvc'
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Install frontend dependencies
+        working-directory: music-tool-v2
+        run: npm ci
+
+      - name: Build Tauri app
+        working-directory: music-tool-v2/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: cargo tauri build
+
+      - name: Generate latest.json for updater
+        working-directory: music-tool-v2/src-tauri/target/release/bundle/nsis
+        run: |
+          $version = (Get-Content ../../../../src-tauri/Cargo.toml | Select-String '^version = ').ToString().Split('"')[1]
+          $sig = Get-Content "Music Tool_${version}_x64-setup.exe.sig" -Raw
+          $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Music Tool_${version}_x64-setup.exe"
+          $json = @{
+            version = $version
+            notes = "See https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+            pub_date = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
+            platforms = @{
+              'windows-x86_64' = @{
+                signature = $sig.Trim()
+                url = $url
+              }
+            }
+          }
+          $json | ConvertTo-Json -Compress | Out-File -Encoding UTF8 latest.json
+        shell: pwsh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            music-tool-v2/src-tauri/target/release/bundle/nsis/Music Tool_*.exe
+            music-tool-v2/src-tauri/target/release/bundle/nsis/latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

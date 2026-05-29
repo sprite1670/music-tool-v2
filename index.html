@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>音乐工具 v2</title>
+    <style>
+      #error-log {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        right: 10px;
+        max-height: 300px;
+        overflow: auto;
+        background: #fff0f0;
+        border: 2px solid #ff4444;
+        border-radius: 8px;
+        padding: 12px;
+        font-family: monospace;
+        font-size: 13px;
+        color: #cc0000;
+        z-index: 99999;
+        display: none;
+        white-space: pre-wrap;
+      }
+      #error-log.show { display: block; }
+      #error-log .err-title { font-weight: bold; margin-bottom: 8px; color: #ff0000; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="error-log"><div class="err-title">JavaScript 错误捕获:</div></div>
+    <script>
+      window.addEventListener('error', function(e) {
+        var log = document.getElementById('error-log');
+        log.classList.add('show');
+        log.innerHTML += 'ERROR: ' + e.message + '\\n  at ' + (e.filename || '') + ':' + (e.lineno || 0) + ':' + (e.colno || 0) + '\\n\\n';
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        var log = document.getElementById('error-log');
+        log.classList.add('show');
+        log.innerHTML += 'PROMISE REJECTION: ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)) + '\\n\\n';
+      });
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
