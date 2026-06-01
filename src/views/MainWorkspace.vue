@@ -834,8 +834,9 @@ async function convertToOgg(buffer: AudioBuffer): Promise<Blob> {
 // ── 扫描本地歌曲（Web 版：文件选择器）───
 async function scanLocalSongs() {
   if (isTauri) {
-    const folderPath = await selectFolderDialog({ title: '选择音乐文件夹' })
-    if (!folderPath) return
+    const result = await selectFolderDialog({ title: '选择音乐文件夹' })
+    if (!result) return
+    const folderPath = Array.isArray(result) ? result[0] : result
     message.info('正在扫描...')
     const { readDir, readFile } = await import(/* @vite-ignore */ '@tauri-apps/plugin-fs')
     const { parseBlob } = await import('music-metadata-browser')
