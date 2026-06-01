@@ -48,7 +48,7 @@ jobs:
         working-directory: src-tauri/target/release/bundle/nsis
         shell: pwsh
         run: |
-          $version = (Select-String -Path ../../../Cargo.toml -Pattern '^version = ').ToString().Split('"')[1]
+          $version = (Select-String -Path ../../../../Cargo.toml -Pattern '^version = ').ToString().Split('"')[1]
           $sig = Get-Content "Music Tool_${version}_x64-setup.exe.sig" -Raw
           $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Music Tool_${version}_x64-setup.exe"
           $json = @{
