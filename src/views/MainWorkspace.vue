@@ -841,14 +841,30 @@ async function scanLocalSongs() {
     const { readDir, readFile } = await import(/* @vite-ignore */ '@tauri-apps/plugin-fs')
     const { parseBlob } = await import('music-metadata-browser')
     const audioExts = ['.mp3', '.flac', '.wav', '.m4a', '.ogg', '.wma', '.aac', '.ape']
-    const entries = await readDir(folderPath)
-    const files = entries.filter((e: any) =>
-      e.isFile && audioExts.some(ext => e.name.toLowerCase().endsWith(ext))
-    )
+
+    // 递归扫描所有子目录
+    async function collectAudioFiles(dirPath: string): Promise<{ path: string, name: string }[]> {
+      const allFiles: { path: string, name: string }[] = []
+      try {
+        const entries = await readDir(dirPath)
+        for (const entry of entries) {
+          const entryPath = `${dirPath}/${entry.name}`
+          if (entry.isDirectory) {
+            const subFiles = await collectAudioFiles(entryPath)
+            allFiles.push(...subFiles)
+          } else if (entry.isFile && audioExts.some(ext => entry.name.toLowerCase().endsWith(ext))) {
+            allFiles.push({ path: entryPath, name: entry.name })
+          }
+        }
+      } catch { /* ignore inaccessible dirs */ }
+      return allFiles
+    }
+
+    const files = await collectAudioFiles(folderPath)
     const parsed: any[] = []
     for (const file of files) {
       try {
-        const data = await readFile(`${folderPath}/${file.name}`)
+        const data = await readFile(file.path)
         const blob = new Blob([data])
         const metadata = await parseBlob(blob)
         parsed.push({
