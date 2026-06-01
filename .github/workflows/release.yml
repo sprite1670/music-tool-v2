@@ -21,11 +21,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: music-tool-v2/package-lock.json
+          cache: ''
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
