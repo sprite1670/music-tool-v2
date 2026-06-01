@@ -834,7 +834,40 @@ async function convertToOgg(buffer: AudioBuffer): Promise<Blob> {
 // ── 扫描本地歌曲（Web 版：文件选择器）───
 async function scanLocalSongs() {
   if (isTauri) {
-    message.info('桌面版将扫描目录中的歌曲文件')
+    const folderPath = await selectFolderDialog({ title: '选择音乐文件夹' })
+    if (!folderPath) return
+    message.info('正在扫描...')
+    const { readDir, readFile } = await import(/* @vite-ignore */ '@tauri-apps/plugin-fs')
+    const { parseBlob } = await import('music-metadata-browser')
+    const audioExts = ['.mp3', '.flac', '.wav', '.m4a', '.ogg', '.wma', '.aac', '.ape']
+    const entries = await readDir(folderPath)
+    const files = entries.filter((e: any) =>
+      e.isFile && audioExts.some(ext => e.name.toLowerCase().endsWith(ext))
+    )
+    const parsed: any[] = []
+    for (const file of files) {
+      try {
+        const data = await readFile(`${folderPath}/${file.name}`)
+        const blob = new Blob([data])
+        const metadata = await parseBlob(blob)
+        parsed.push({
+          id: file.name + Date.now(),
+          name: metadata.common?.title || file.name.replace(/\.[^.]+$/, ''),
+          artists: metadata.common?.artist ? [metadata.common.artist] : ['本地文件'],
+          album: metadata.common?.album || '本地音乐',
+          duration: Math.round((metadata.format?.duration || 0)),
+          source: 'local',
+          cover_url: '',
+          file: blob,
+          lyricist: metadata.common?.lyricist || '',
+          composer: metadata.common?.composer || '',
+        })
+      } catch { /* ignore unreadable files */ }
+    }
+    songs.value = parsed
+    if (parsed.length > 0) selectSong(parsed[0])
+    statusText.value = `已扫描 ${parsed.length} 首本地歌曲`
+    message.success(`已扫描 ${parsed.length} 首本地歌曲`)
     return
   }
   const input = document.createElement('input')
