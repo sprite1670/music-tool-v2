@@ -8,6 +8,7 @@ fn ping() -> &'static str {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             ping,
         ])

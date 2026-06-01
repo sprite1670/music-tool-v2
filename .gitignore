@@ -35,3 +35,11 @@ src-tauri/gen/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Build outputs
+bin/
+out/
+*.exe
+
+# WorkBuddy memory
+.workbuddy/
