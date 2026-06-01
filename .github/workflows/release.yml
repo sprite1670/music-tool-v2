@@ -25,7 +25,6 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: 'music-tool-v2/package-lock.json'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -36,21 +35,20 @@ jobs:
         run: cargo install tauri-cli --version '^2' --locked
 
       - name: Install frontend dependencies
-        working-directory: music-tool-v2
         run: npm ci
 
       - name: Build Tauri app
-        working-directory: music-tool-v2/src-tauri
+        working-directory: src-tauri
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: cargo tauri build
 
       - name: Generate latest.json for updater
-        working-directory: music-tool-v2/src-tauri/target/release/bundle/nsis
+        working-directory: src-tauri/target/release/bundle/nsis
         shell: pwsh
         run: |
-          $version = (Select-String -Path ../../../../src-tauri/Cargo.toml -Pattern '^version = ').ToString().Split('"')[1]
+          $version = (Select-String -Path ../../../Cargo.toml -Pattern '^version = ').ToString().Split('"')[1]
           $sig = Get-Content "Music Tool_${version}_x64-setup.exe.sig" -Raw
           $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Music Tool_${version}_x64-setup.exe"
           $json = @{
@@ -70,7 +68,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            music-tool-v2/src-tauri/target/release/bundle/nsis/Music Tool_*.exe
-            music-tool-v2/src-tauri/target/release/bundle/nsis/latest.json
+            src-tauri/target/release/bundle/nsis/Music Tool_*.exe
+            src-tauri/target/release/bundle/nsis/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
