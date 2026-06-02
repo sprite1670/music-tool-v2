@@ -34,11 +34,6 @@
       </div>
     </div>
 
-    <!-- Web 环境提示 -->
-    <p v-if="!isTauriEnv" class="web-hint">
-      ⚠️ Web 版暂不支持音频格式转换，此功能需要桌面版
-    </p>
-
     <!-- 转换选项 -->
     <div class="options-panel card">
       <div class="option-row">
@@ -58,14 +53,6 @@
         <n-select v-model:value="sampleRate" :options="sampleRateOptions"
                   style="width: 140px;" />
       </div>
-
-      <div class="option-row">
-        <label>输出目录：</label>
-        <div class="output-path-group">
-          <n-input v-model:value="outputPath" placeholder="默认为源文件目录" readonly style="flex:1;" />
-          <n-button @click="selectOutputDir">浏览</n-button>
-        </div>
-      </div>
     </div>
 
     <!-- 转换按钮和进度 -->
@@ -78,7 +65,7 @@
 
       <!-- 进度条 -->
       <div v-if="converting || convertProgress > 0" class="progress-section">
-        <n-progress type="line" :percentage="convertProgress" :status="'success'"
+        <n-progress type="line" :percentage="convertProgress" :status="progressStatus"
                     :show-indicator="true" style="margin: 12px 0;" />
         <p class="progress-text">{{ progressText }}</p>
       </div>
@@ -86,11 +73,11 @@
 
     <!-- 完成结果 -->
     <div v-if="completed && !converting" class="result-section card">
-      <n-result status="success" title="转换完成！"
-                :description="`成功转换 ${convertedCount} 个文件`">
+      <n-result :status="hasError ? 'warning' : 'success'"
+                :title="hasError ? '转换完成（部分失败）' : '转换完成！'"
+                :description="`成功 ${convertedCount} / ${files.length}`">
         <template #footer>
-          <n-button @click="openOutputDir">打开输出目录</n-button>
-          <n-button @click="resetAll" style="margin-left: 8px;">重新开始</n-button>
+          <n-button @click="resetAll">重新开始</n-button>
         </template>
       </n-result>
     </div>
@@ -101,7 +88,7 @@
 import { ref, onMounted } from 'vue'
 import {
   NSelect, NButton, NIcon, NProgress, NResult,
-  useMessage, useDialog,
+  useMessage,
 } from 'naive-ui'
 import { MusicalNotesOutline, CloseOutline } from '@vicons/ionicons5'
 
@@ -115,22 +102,23 @@ onMounted(() => {
 
 const files = ref<File[]>([])
 const isDragging = ref(false)
-const targetFormat = ref<string>('mp3')
+const targetFormat = ref<string>('wav')
 const bitrate = ref<string>('320k')
 const sampleRate = ref<string>('44100')
-const outputPath = ref('')
 const converting = ref(false)
 const convertProgress = ref(0)
 const progressText = ref('')
+const progressStatus = ref<'success' | 'warning' | 'error'>('success')
 const completed = ref(false)
 const convertedCount = ref(0)
+const hasError = ref(false)
 
 const formatOptions = [
+  { label: 'WAV (无损)', value: 'wav' },
   { label: 'MP3 (最常用)', value: 'mp3' },
   { label: 'FLAC (无损)', value: 'flac' },
-  { label: 'WAV (无损)', value: 'wav' },
-  { label: 'AAC (Apple)', value: 'aac' },
   { label: 'OGG (开源)', value: 'ogg' },
+  { label: 'AAC (Apple)', value: 'aac' },
 ]
 
 const bitrateOptions = [
@@ -143,7 +131,6 @@ const bitrateOptions = [
 const sampleRateOptions = [
   { label: '44.1 kHz', value: '44100' },
   { label: '48 kHz', value: '48000' },
-  { label: '96 kHz', value: '96000' },
 ]
 
 function handleDrop(e: DragEvent) {
@@ -181,20 +168,101 @@ function formatSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-async function selectOutputDir() {
-  // Electron 环境
-  if ((window as any).electronAPI) {
-    const result = await (window as any).electronAPI.selectFolder({
-      title: '选择输出目录',
-    })
-    if (!result.canceled && result.filePaths?.length > 0) {
-      outputPath.value = result.filePaths[0]
-    }
-  } else {
-    message.info('需要完整应用环境')
+// ── 音频 Buffer 转 WAV Blob ─────────────────
+function audioBufferToWav(buffer: AudioBuffer): Blob {
+  const numChannels = buffer.numberOfChannels
+  const sampleRate = buffer.sampleRate
+  const bitDepth = 16
+  const bytesPerSample = bitDepth / 8
+  const blockAlign = numChannels * bytesPerSample
+  const dataLength = buffer.length * numChannels * bytesPerSample
+  const bufferLength = 44 + dataLength
+  const arrayBuffer = new ArrayBuffer(bufferLength)
+  const view = new DataView(arrayBuffer)
+
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i))
   }
+
+  writeString(0, 'RIFF')
+  view.setUint32(4, 36 + dataLength, true)
+  writeString(8, 'WAVE')
+  writeString(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true) // PCM
+  view.setUint16(22, numChannels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * blockAlign, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, bitDepth, true)
+  writeString(36, 'data')
+  view.setUint32(40, dataLength, true)
+
+  const offset = 44
+  const channels: Float32Array[] = []
+  for (let i = 0; i < numChannels; i++) channels.push(buffer.getChannelData(i))
+
+  let index = 0
+  for (let i = 0; i < buffer.length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      const sample = Math.max(-1, Math.min(1, channels[ch][i]))
+      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF
+      view.setInt16(offset + index, intSample, true)
+      index += 2
+    }
+  }
+
+  return new Blob([arrayBuffer], { type: 'audio/wav' })
 }
 
+// ── 使用 FFmpeg WASM 转换 ───────────────────
+async function convertWithFfmpeg(inputFile: File, outputExt: string, br: string, sr: string): Promise<Blob> {
+  const { FFmpeg } = await import('@ffmpeg/ffmpeg')
+  const { fetchFile } = await import('@ffmpeg/util')
+
+  const ffmpeg = new FFmpeg()
+
+  // 加载 FFmpeg（带进度回调）
+  progressText.value = '正在加载 FFmpeg（首次使用需下载 ~25MB）...'
+  try {
+    await ffmpeg.load()
+  } catch (e) {
+    throw new Error('FFmpeg 加载失败，请检查网络连接')
+  }
+
+  const inputName = 'input.' + inputFile.name.split('.').pop()
+  const outputName = 'output.' + outputExt
+
+  await ffmpeg.writeFile(inputName, await fetchFile(inputFile))
+
+  const args = ['-i', inputName]
+  if (sr) args.push('-ar', sr)
+  if (outputExt === 'mp3') {
+    args.push('-codec:a', 'libmp3lame', '-b:a', br)
+  } else if (outputExt === 'ogg') {
+    args.push('-codec:a', 'libvorbis', '-q:a', '4')
+  } else if (outputExt === 'aac') {
+    args.push('-codec:a', 'aac', '-b:a', br)
+  } else if (outputExt === 'flac') {
+    args.push('-codec:a', 'flac')
+  } else {
+    args.push('-codec:a', 'pcm_s16le')
+  }
+  args.push('-y', outputName)
+
+  await ffmpeg.exec(args)
+  const data = await ffmpeg.readFile(outputName)
+  // @ts-ignore - FFmpeg FileData 兼容性
+  const blob = new Blob([data as BlobPart], { type: `audio/${outputExt}` })
+
+  // 清理
+  try { await ffmpeg.deleteFile(inputName) } catch {}
+  try { await ffmpeg.deleteFile(outputName) } catch {}
+
+  return blob
+}
+
+// ── 开始转换 ────────────────────────────────
 async function startConvert() {
   if (files.value.length === 0) return
 
@@ -202,47 +270,63 @@ async function startConvert() {
   completed.value = false
   convertProgress.value = 0
   convertedCount.value = 0
+  hasError.value = false
+  progressStatus.value = 'success'
 
-  try {
-    // Electron 环境
-    if ((window as any).electronAPI) {
-      // 将 File 对象转换为路径
-      const filePaths = files.value.map(f => (f as any).path || f.name)
+  const total = files.value.length
+  const outputExt = targetFormat.value
 
-      // 调用主进程进行转换
-      const result = await (window as any).electronAPI.convertFiles({
-        files: filePaths,
-        targetFormat: targetFormat.value,
-        bitrate: bitrate.value,
-        sampleRate: parseInt(sampleRate.value),
-        outputPath: outputPath.value || undefined,
-      })
+  for (let i = 0; i < total; i++) {
+    const file = files.value[i]
+    progressText.value = `正在转换: ${file.name}`
+    convertProgress.value = Math.round((i / total) * 100)
 
-      if (result.ok) {
-        convertedCount.value = files.value.length
-        convertProgress.value = 100
-        message.success(`完成！已转换 ${files.value.length} 个文件`)
+    try {
+      let blob: Blob
+      const ext = outputExt
+
+      if (ext === 'wav') {
+        // WAV：使用 Web Audio API（轻量快速）
+        const arrayBuffer = await file.arrayBuffer()
+        const audioContext = new AudioContext()
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+        blob = audioBufferToWav(audioBuffer)
       } else {
-        message.error(`转换失败: ${result.error}`)
+        // 其他格式：使用 FFmpeg WASM
+        blob = await convertWithFfmpeg(file, ext, bitrate.value, sampleRate.value)
       }
-    } else {
-      // 模拟进度
-      for (let i = 0; i <= files.value.length; i++) {
-        convertProgress.value = Math.round((i / files.value.length) * 100)
-        progressText.value = i < files.value.length
-          ? `正在转换: ${files.value[i].name}`
-          : '转换完成!'
-        await new Promise(r => setTimeout(r, 500))
-      }
-      convertedCount.value = files.value.length
-      message.success('演示模式：模拟转换完成')
+
+      const newName = file.name.replace(/\.[^.]+$/, '') + '.' + ext
+      const objUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objUrl
+      a.download = newName
+      a.click()
+      URL.revokeObjectURL(objUrl)
+
+      convertedCount.value++
+    } catch (e: any) {
+      console.error('转换失败:', file.name, e)
+      hasError.value = true
+      progressStatus.value = 'warning'
+      message.error(`${file.name} 转换失败: ${String(e).substring(0, 60)}`)
     }
 
-    completed.value = true
-  } catch (e) {
-    message.error(`转换失败: ${String(e)}`)
-  } finally {
-    converting.value = false
+    // 每文件间隔，避免浏览器拦截批量下载
+    if (i < total - 1) {
+      await new Promise(r => setTimeout(r, 600))
+    }
+  }
+
+  convertProgress.value = 100
+  converting.value = false
+  completed.value = true
+  progressText.value = `完成 ${convertedCount.value}/${total}`
+
+  if (hasError.value) {
+    message.warning(`转换完成，${convertedCount.value}/${total} 成功`)
+  } else {
+    message.success(`全部转换完成！${convertedCount.value} 个文件`)
   }
 }
 
@@ -251,15 +335,12 @@ function resetAll() {
   convertProgress.value = 0
   completed.value = false
   convertedCount.value = 0
-}
-
-async function openOutputDir() {
-  message.success('已打开输出目录')
+  hasError.value = false
+  progressStatus.value = 'success'
 }
 </script>
 
 <style lang="scss" scoped>
-
 .converter-view { max-width: 900px; }
 
 .drop-zone {

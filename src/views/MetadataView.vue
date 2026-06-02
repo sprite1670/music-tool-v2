@@ -240,9 +240,18 @@ async function saveMetadata() {
   try {
     if (isTauriEnv.value) {
       // Tauri 环境：调用后端写入元数据
+      const filePath = (currentFile.value as any).path || currentFile.value.name
       await invoke('write_metadata', {
-        filePath: (currentFile.value as any).path || currentFile.value.name,
-        metadata: metadata.value,
+        file_path: filePath,
+        metadata: {
+          title: metadata.value.title || null,
+          artist: metadata.value.artist || null,
+          album: metadata.value.album || null,
+          year: metadata.value.year,
+          genre: metadata.value.genre || null,
+          track_number: metadata.value.trackNumber,
+          disc_number: metadata.value.discNumber,
+        },
       })
       message.success('元数据保存成功！')
       addRecent({

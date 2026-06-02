@@ -103,17 +103,6 @@
                         @click="showLyrics(song)">
                 歌词
               </n-button>
-              <n-button size="small" secondary type="success"
-                        :loading="downloadingId === song.id"
-                        @click="downloadSong(song)">
-                下载
-              </n-button>
-              <n-dropdown :options="qualityOptions" @select="(v) => downloadSong(song, v as string)"
-                          placement="bottom-end">
-                <n-button size="small" quaternary>
-                  ▼ 品质
-                </n-button>
-              </n-dropdown>
             </div>
 
             <!-- 时长 -->
@@ -187,7 +176,6 @@ const source = ref<string>('all')
 const loading = ref(false)
 const results = ref<any[]>([])
 const hasSearched = ref(false)
-const downloadingId = ref<string | null>(null)
 
 // 批量选择
 const selectedIds = ref<Set<string>>(new Set())
@@ -230,13 +218,6 @@ const sourceOptions = [
   { label: '全部平台', value: 'all' },
   { label: '网易云音乐', value: 'netease' },
   { label: 'QQ音乐', value: 'qq' },
-]
-
-// 音质选项
-const qualityOptions = [
-  { label: '标准品质 (128k)', key: '128k' },
-  { label: '高品质 (320k)', key: '320k' },
-  { label: '无损 (FLAC)', key: 'flac' },
 ]
 
 // 热门搜索提示
@@ -299,33 +280,6 @@ async function showLyrics(song: any) {
     }
   } finally {
     lyricsLoading.value = false
-  }
-}
-
-// 下载歌曲
-async function downloadSong(song: any, quality: string = '320k') {
-  downloadingId.value = song.id
-  try {
-    const filePath = await saveFileDialog({
-      title: '保存歌曲',
-      defaultPath: `${song.name} - ${song.artists?.[0] || '未知'}.mp3`,
-      filters: [{ name: '音频文件', extensions: ['mp3', 'flac', 'wav'] }],
-    })
-    if (filePath) {
-      message.success(`已保存到: ${filePath}`)
-      addRecent({
-        name: song.name,
-        artists: song.artists || [],
-        cover: song.cover_url || '',
-        action: '下载歌曲',
-      })
-    }
-  } catch (e: any) {
-    if (e.message !== 'TAURI_ONLY') {
-      message.error(`下载失败: ${String(e)}`)
-    }
-  } finally {
-    downloadingId.value = null
   }
 }
 

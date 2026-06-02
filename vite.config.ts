@@ -27,12 +27,55 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    strictPort: false,
+    strictPort: true,
     proxy: {
-      // 开发模式下代理到集成服务器（8080）
-      '/api': {
-        target: 'http://localhost:8080',
+      // 网易云 API 代理
+      '/api/netease': {
+        target: 'https://music.163.com',
         changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/netease/, ''),
+      },
+      // QQ 音乐 API 代理
+      '/api/qq': {
+        target: 'https://u.y.qq.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/qq/, ''),
+      },
+      // QQ 音乐歌词代理
+      '/api/qq-lyric': {
+        target: 'https://c.y.qq.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/qq-lyric/, ''),
+      },
+      // 酷狗搜索代理
+      '/api/kugou': {
+        target: 'https://songsearch.kugou.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/kugou/, ''),
+      },
+      // 酷狗歌词代理
+      '/api/lyrics': {
+        target: 'https://lyrics.kugou.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/lyrics/, ''),
+      },
+      // imjad 代理
+      '/api/imjad': {
+        target: 'https://api.imjad.cn',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/imjad/, ''),
+      },
+      // 酷狗 wwwapi 代理
+      '/api/kgwww': {
+        target: 'https://wwwapi.kugou.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/kgwww/, ''),
+      },
+      // ytmusic 代理
+      '/api/ytmusic': {
+        target: 'https://ytmusic-api.yemsyyy.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/ytmusic/, ''),
       },
     },
   },

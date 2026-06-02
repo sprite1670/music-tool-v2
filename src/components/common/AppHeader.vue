@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <header class="app-header">
     <div class="header-left">
       <!-- Logo -->

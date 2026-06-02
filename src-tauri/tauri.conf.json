@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "identifier": "com.musictool.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "",
     "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"
@@ -43,13 +43,5 @@
       }
     }
   },
-  "plugins": {
-    "updater": {
-      "active": true,
-      "endpoints": [
-        "https://github.com/YOUR_GITHUB_USERNAME/music-tool-v2/releases/latest/download/latest.json"
-      ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY1QkNFNzhCMEVCRTFGNjMKUldSakg3NE9pK2U4WmRadFdZR29ZaDUyT3BKQ0VKSWg2RE51Uyt3MmJqQ0hFU1c0bi9pZFJFRFcK"
-    }
-  }
+  "plugins": {}
 }
