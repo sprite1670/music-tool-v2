@@ -1,3 +1,8 @@
+import { Buffer } from 'buffer'
+if (typeof (window as any).Buffer === 'undefined') {
+  ;(window as any).Buffer = Buffer
+}
+
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'

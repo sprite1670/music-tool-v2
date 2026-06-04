@@ -242,7 +242,7 @@ async function saveMetadata() {
       // Tauri 环境：调用后端写入元数据
       const filePath = (currentFile.value as any).path || currentFile.value.name
       await invoke('write_metadata', {
-        file_path: filePath,
+        filePath,
         metadata: {
           title: metadata.value.title || null,
           artist: metadata.value.artist || null,

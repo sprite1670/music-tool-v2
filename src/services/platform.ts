@@ -2,13 +2,11 @@
  * 平台适配层 —— 统一 Tauri / Web 环境差异
  */
 
-// ── 环境检测 ──────────────────────────────
-// isTauri：Tauri 桌面环境（WebView 中 __TAURI__ 等全局变量会被注入）
+// ── 环境检测 ─────────────────────────────
 export const isTauri =
   typeof window !== 'undefined' &&
-  ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)
+  ('__TAURI__' in window || '__TAURI_INTERNALS__' in window || '__TAURI_METADATA__' in window)
 
-// isDev：Vite 开发模式（dev server 运行时为 true）
 const isDev = typeof import.meta !== 'undefined' && !!import.meta.env?.DEV
 
 // ── 统一 invoke（Tauri 环境才可用）──────────
@@ -21,9 +19,8 @@ export async function invoke<T = any>(cmd: string, args: Record<string, any> = {
 }
 
 // ── API 请求统一入口 ────────────────────────
-// 开发模式：走 Vite 代理（最稳定，无 CORS 问题）
-// 生产模式（Tauri）：用 plugin-http 的 fetch 绕过 CORS
-// 生产模式（Web）：标准 fetch（需要服务端支持 CORS）
+// 开发模式：走 Vite 代理
+// 生产模式（Tauri）：用 Rust 后端 HTTP 代理绕过 CORS
 async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
   // 开发模式：将完整 URL 转换为 Vite 代理路径
   if (isDev) {
@@ -49,15 +46,30 @@ async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
     }
   }
 
-  if (!isDev && isTauri) {
-    // 生产模式 + Tauri 环境：用 plugin-http 绕过 CORS
-    try {
-      const { fetch: tauriFetch } = await import(/* @vite-ignore */ '@tauri-apps/plugin-http')
-      return tauriFetch(url, options)
-    } catch (e) {
-      console.warn('[apiFetch] plugin-http 不可用，降级为标准 fetch', e)
+  // Tauri 生产模式：用 Rust 后端 HTTP 代理绕过 CORS
+  if (isTauri) {
+    const hdrs: Record<string, string> = {}
+    if (options?.headers) {
+      const h = options.headers
+      if (h instanceof Headers) {
+        h.forEach((v, k) => { hdrs[k] = v })
+      } else if (Array.isArray(h)) {
+        h.forEach(([k, v]) => { hdrs[k] = v })
+      } else {
+        Object.entries(h).forEach(([k, v]) => { hdrs[k] = v })
+      }
     }
+    const resp = await invoke('http_request', {
+      url,
+      method: options?.method || 'GET',
+      headers: hdrs,
+      body: options?.body as string | undefined,
+    })
+    // 包装成 Response 对象
+    return new Response(resp.body, { status: resp.status, headers: resp.headers })
   }
+
+  // Web 环境：标准 fetch（可能受 CORS 限制）
   return fetch(url, options)
 }
 
@@ -112,14 +124,11 @@ export async function selectFolderDialog(_options: any = {}) {
 }
 
 // ── API URL 构建 ─────────────────────────────
-// 开发模式（Vite dev server 运行时）：走代理，无 CORS 问题
-// 生产模式（Tauri 打包后）：走直连，由 apiFetch 通过 plugin-http 绕过 CORS
 function apiUrl(
   type: 'netease' | 'qq' | 'qq-lyric' | 'kugou' | 'lyrics',
   path: string,
 ): string {
   if (isDev) {
-    // 开发模式：走 Vite 代理
     const proxy: Record<string, string> = {
       netease: '/api/netease',
       qq: '/api/qq',
@@ -129,7 +138,6 @@ function apiUrl(
     }
     return proxy[type] + path
   }
-  // 生产模式：直连第三方 API
   const base: Record<string, string> = {
     netease: 'https://music.163.com',
     qq: 'https://u.y.qq.com',
@@ -236,7 +244,6 @@ async function desktopSearchMusic(keyword: string, source: string): Promise<any[
 }
 
 // ── 获取歌词（多源聚合）────────────────
-// 统一走直接请求，无需代理
 export async function getLyrics(
   songId: string,
   _source: string,
@@ -253,39 +260,42 @@ async function desktopGetLyrics(
   songName?: string,
   _albumId?: string,
 ): Promise<{ lyric: string; translated?: string; from?: string }> {
-  const results: any[] = []
+  const results: Array<{ lyric: string; translated: string; from: string }> = []
 
-  if (source === 'netease' || source === 'all') {
+  // 网易云：需要有正确的 songId（数字 ID）
+  if ((source === 'netease' || source === 'all') && songId && /^\d+$/.test(songId)) {
     try {
       const url = apiUrl('netease', `/api/song/lyric?id=${songId}&lv=-1&tv=-1`)
       const resp = await apiFetch(url, { headers: { 'Referer': 'https://music.163.com/' } })
       const body = await safeJson(resp)
       if (body?.lrc?.lyric) {
-        results.push({ source: '网易云', lyric: body.lrc.lyric, translated: body?.tlyric?.lyric || '' })
+        results.push({ from: '网易云', lyric: body.lrc.lyric, translated: body?.tlyric?.lyric || '' })
       }
     } catch (e) { console.warn('[Desktop] 网易云歌词失败', e) }
   }
 
-  if (source === 'qq' || source === 'all') {
+  // QQ 音乐：按歌名搜索
+  if ((source === 'qq' || source === 'all') && songName) {
     try {
       const searchData = JSON.stringify({
-        req_1: { method: 'DoSearchForQQMusicDesktop', module: 'music.search.SearchCgiService', param: { remoteplace: 'txt.mqq.all', searchid: '1', query: songName || '', page_num: 1, num_per_page: 1 } }
+        req_1: { method: 'DoSearchForQQMusicDesktop', module: 'music.search.SearchCgiService', param: { remoteplace: 'txt.mqq.all', searchid: '1', query: songName, page_num: 1, num_per_page: 1 } }
       })
       const searchUrl = apiUrl('qq', `/cgi-bin/musicu.fcg?_=1&g_tk=5381&loginUin=0&hostUin=0&format=json&data=${encodeURIComponent(searchData)}`)
       const searchResp = await apiFetch(searchUrl, { headers: { 'Referer': 'https://y.qq.com/', 'Origin': 'https://y.qq.com/' } })
       const searchBody = await safeJson(searchResp)
       const qqSong = searchBody?.req_1?.data?.body?.song?.list?.[0]
       if (qqSong?.mid) {
-        const lyricUrl = apiUrl('qq-lyric', `/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${qqSong.mid}&g_tk=5381&format=json&nobase64=1`)
+        const lyricUrl = apiUrl('qq-lyric', `/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${qqSong.mid}&g_tk=5381&format=json&nobase64=1`)
         const lyricResp = await apiFetch(lyricUrl, { headers: { 'Referer': 'https://c.y.qq.com/', 'User-Agent': 'Mozilla/5.0' } })
         const lyricBody = await safeJson(lyricResp)
         if (lyricBody?.data?.lyric) {
-          results.push({ source: 'QQ音乐', lyric: lyricBody.data.lyric, translated: lyricBody.data.trans || '' })
+          results.push({ from: 'QQ音乐', lyric: lyricBody.data.lyric, translated: lyricBody.data.trans || '' })
         }
       }
     } catch (e) { console.warn('[Desktop] QQ音乐歌词失败', e) }
   }
 
+  // 酷狗：按歌名搜索
   if ((source === 'kugou' || source === 'all') && songName) {
     try {
       const searchUrl = apiUrl('kugou', `/song_search_v2?keyword=${encodeURIComponent(songName)}&page=1&pagesize=3&platform=WebFilter`)
@@ -301,17 +311,21 @@ async function desktopGetLyrics(
           const dlUrl = apiUrl('lyrics', `/download?ver=1&hash=${kgSong.FileHash}&album_id=${kgSong.AlbumID || ''}&id=${kc.id}&accesskey=${kc.accesskey}&encode=utf8&fmt=lrc`)
           const dlResp = await apiFetch(dlUrl, { headers: { 'Referer': 'https://www.kugou.com/', 'User-Agent': 'Mozilla/5.0' } })
           const dlBody = await safeJson(dlResp)
-            if (dlBody?.content) {
-              const lyric = base64ToUtf8(dlBody.content)
-            results.push({ source: '酷狗', lyric, translated: '' })
+          if (dlBody?.content) {
+            const lyric = base64ToUtf8(dlBody.content)
+            results.push({ from: '酷狗', lyric, translated: '' })
           }
         }
       }
     } catch (e) { console.warn('[Desktop] 酷狗歌词失败', e) }
   }
 
-  const best = results[0] || { lyric: '', translated: '', from: '' }
-  return { lyric: best.lyric, translated: best.translated || '', from: best.source }
+  if (results.length > 0) {
+    console.log('[lyrics] 结果来源:', results[0].from)
+    return { lyric: results[0].lyric, translated: results[0].translated || '', from: results[0].from }
+  }
+  console.warn('[lyrics] 所有来源均无歌词结果')
+  return { lyric: '', translated: '', from: '' }
 }
 
 // ── 写入文件（Tauri）或触发下载（Web）──
@@ -360,5 +374,7 @@ export async function loadLyricsForLocal(
   artist?: string,
 ): Promise<{ lyric: string; translated?: string; from?: string }> {
   const keyword = artist ? `${songName} ${artist}` : songName
+  // 本地歌曲没有有效 songId，只走 QQ 和酷狗（按歌名搜索）
+  // 先尝试 netease（如果歌名能搜到）
   return await getLyrics('', 'all', keyword)
 }

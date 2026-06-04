@@ -93,7 +93,7 @@
           <n-empty description="选择歌曲查看详情"/>
         </div>
 
-        <!-- 功能按钮区：格式转换 / 歌词管理 / 元数据编辑 -->
+        <!-- 功能按钮区 -->
         <div class="function-bar">
           <n-button
             :type="activePanel === 'convert' ? 'primary' : 'default'"
@@ -125,6 +125,7 @@
 
         <!-- 可折叠功能面板 -->
         <div class="function-panels">
+
           <!-- 格式转换面板 -->
           <div v-show="activePanel === 'convert'" class="func-panel">
             <div class="panel-header">
@@ -136,9 +137,6 @@
                 <n-empty description="请在左侧选择要转换的歌曲"/>
               </div>
               <div v-else class="convert-config">
-                <div v-if="ffmpegLoadError" class="ffmpeg-error">
-                  <div class="error-box">⚠️ FFmpeg 加载失败：{{ ffmpegLoadError }}</div>
-                </div>
                 <div class="format-picker">
                   <span>目标格式：</span>
                   <n-radio-group v-model:value="convertTargetFormat" size="small">
@@ -148,16 +146,15 @@
                   </n-radio-group>
                 </div>
                 <div class="convert-actions-top">
-                  <n-button size="small" :loading="ffmpegLoading" :disabled="convertingAny" @click="startConvertAll">全部转换</n-button>
-                  <n-button size="small" secondary :disabled="!convertingAny" @click="stopAllConvert">全部停止</n-button>
+                  <n-button size="small" :disabled="convertingAny" @click="startConvertAll">全部转换</n-button>
                 </div>
                 <div class="file-rows">
                   <div v-for="song in selectedSongs" :key="song.id" class="file-row">
                     <span class="fname">{{ song.name }}</span>
-                    <div class="fprogress">
+                    <div class="f-progress">
                       <n-progress v-if="convertStates[song.id]?.status === 'converting'"
-                                  type="line" :percentage="convertStates[song.id]?.progress || 0"
-                                  :show-indicator="false" :height="4" style="width:80px;"/>
+                                      type="line" :percentage="convertStates[song.id]?.progress || 0"
+                                      :show-indicator="false" :height="4" style="width:80px;"/>
                       <span v-else :class="['fstatus',
                         convertStates[song.id]?.status === 'done' ? 'done' :
                         convertStates[song.id]?.status === 'error' ? 'fail' : '']">
@@ -165,13 +162,17 @@
                            convertStates[song.id]?.status === 'error' ? '失败' : '等待中' }}
                       </span>
                     </div>
-                    <div class="factions">
-                      <n-button v-if="convertStates[song.id]?.status === 'converting'"
-                                size="tiny" quaternary type="error" @click="stopConvert(song.id)">停止</n-button>
-                      <n-button v-else-if="convertStates[song.id]?.status !== 'converting'"
+                    <div class="f-actions">
+                      <n-button v-if="convertStates[song.id]?.status !== 'converting'"
                                 size="tiny" quaternary :disabled="convertingAny"
                                 @click="startConvertOne(song)">转换</n-button>
                     </div>
+                  </div>
+                </div>
+                <div v-if="hasConvertErrors" class="convert-errors">
+                  <div v-for="song in selectedSongs.filter(s => convertStates[s.id]?.status === 'error')"
+                       :key="'err-'+song.id" class="error-item">
+                    ❌ {{ song.name }}：{{ convertStates[song.id]?.error }}
                   </div>
                 </div>
               </div>
@@ -187,7 +188,6 @@
               </div>
             </div>
             <div class="panel-body">
-              <!-- 当前歌曲歌词 -->
               <div v-if="currentSong && lyricData.lyric" class="lyric-preview">
                 <n-tabs v-model:value="lyricTab">
                   <n-tab-pane name="original" tab="原文">
@@ -209,7 +209,6 @@
                   </template>
                 </n-empty>
               </div>
-              <!-- 批量歌词歌曲列表 -->
               <div v-if="selectedIds.size > 0" class="lyrics-batch-list">
                 <div class="sub-title">已选歌曲（{{ selectedIds.size }} 首）</div>
                 <div v-for="song in songs.filter(s => selectedIds.has(s.id + '|' + s.source))" :key="song.id" class="batch-item">
@@ -272,7 +271,7 @@
       </template>
     </n-modal>
 
-    <!-- 歌词预览弹窗（从歌曲列表点击预览时使用） -->
+    <!-- 歌词预览弹窗 -->
     <n-modal v-model:show="showLyricModal" preset="card" title="歌词预览" style="width: 540px">
       <n-tabs v-model:value="lyricTab">
         <n-tab-pane name="original" tab="原文"><pre class="lyric-text-modal">{{ lyricData.lyric || '（无歌词）' }}</pre></n-tab-pane>
@@ -287,7 +286,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, toRaw } from 'vue'
+import { ref, computed, toRaw } from 'vue'
 import {
   NInput, NButton, NIcon, NEmpty, NTag, NModal,
   NForm, NFormItem, NRadioGroup, NRadioButton,
@@ -297,15 +296,16 @@ import {
   SearchOutline, FolderOpenOutline, SettingsOutline,
   SyncOutline, DocumentTextOutline, DiscOutline, PencilOutline,
 } from '@vicons/ionicons5'
+import { invoke } from '@tauri-apps/api/core'
 import {
   searchMusic, getLyrics, saveFileDialog,
-  selectFolderDialog, isTauri, loadLyricsForLocal,
+  selectFolderDialog, openFileDialog, isTauri, loadLyricsForLocal,
 } from '@/services/platform'
 import { addRecent } from '@/services/recent'
 
 const message = useMessage()
 
-// ── 搜索 ─────────────────────────
+// ── 搜索 ────────────────────────
 const searchQuery = ref('')
 const doSearch = () => { message.info('请在搜索页面使用搜索功能') }
 
@@ -337,69 +337,126 @@ function selectSong(song: any) {
 
 // ── 扫描本地歌曲 ─────────────────
 async function scanLocalSongs() {
-  if (isTauri) {
-    const result = await selectFolderDialog({ title: '选择音乐文件夹' })
-    if (!result) return
-    const folderPath = Array.isArray(result) ? result[0] : result
-    message.info('正在扫描...')
-    const { readDir, readFile } = await import(/* @vite-ignore */ '@tauri-apps/plugin-fs')
-    const { parseBlob } = await import('music-metadata-browser')
-    const audioExts = ['.mp3','.flac','.wav','.m4a','.ogg','.wma','.aac','.ape']
-    async function walk(dir: string): Promise<{path:string,name:string}[]> {
-      const out: {path:string,name:string}[] = []
-      try {
-        const entries = await readDir(dir)
-        for (const e of entries) {
-          const p = `${dir}/${e.name}`
-          if (e.isDirectory) { const r = await walk(p); out.push(...r) }
-          else if (e.isFile && audioExts.some(x => e.name.toLowerCase().endsWith(x))) out.push({ path: p, name: e.name })
-        }
-      } catch {}
-      return out
+  const logLines: string[] = []
+  function log(...args: any[]) {
+    const line = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')
+    logLines.push(`[${new Date().toLocaleTimeString()}] ${line}`)
+    console.log(...args)
+  }
+  function logError(...args: any[]) {
+    const line = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')
+    logLines.push(`[${new Date().toLocaleTimeString()}] [ERROR] ${line}`)
+    console.error(...args)
+  }
+
+  async function saveLog() {
+    const logContent = logLines.join('\n')
+    try {
+      const { writeFile, BaseDirectory } = await import('@tauri-apps/plugin-fs')
+      await writeFile('music-tool-scan-log.txt', new TextEncoder().encode(logContent), { baseDir: BaseDirectory.Desktop })
+      message.success('日志已保存到桌面')
+      log('[scan] 日志已保存')
+    } catch (e: any) {
+      console.error('保存日志失败:', e)
+      const summary = logLines.length > 25 ? logLines.slice(-25).join('\n') : logContent
+      message.error('无法写入日志文件。\n\n===== 扫描日志（最后25行）=====\n' + summary)
     }
-    const files = await walk(folderPath)
-    const parsed: any[] = []
-    for (const f of files) {
-      try {
-        const data = await readFile(f.path)
-        const blob = new Blob([data])
-        const m = await parseBlob(blob)
-        parsed.push({
-          id: f.name + Date.now(), name: m.common?.title || f.name.replace(/\.[^.]+$/,''),
-          artists: m.common?.artist ? [m.common.artist] : ['本地文件'],
-          album: m.common?.album || '本地音乐', duration: Math.round(m.format?.duration||0),
-          source: 'local', cover_url: '', file: blob,
-          lyricist: m.common?.lyricist || '', composer: m.common?.composer || '',
-        })
-      } catch {}
-    }
-    songs.value = parsed
-    if (parsed.length) selectSong(parsed[0])
-    message.success(`已扫描 ${parsed.length} 首`)
+  }
+
+  log('[scan] 开始扫描, isTauri=', isTauri)
+
+  if (!isTauri) {
+    logError('[scan] 不在 Tauri 环境中')
+    message.error('本地扫描需要桌面版')
     return
   }
-  // Web 版
-  const input = document.createElement('input')
-  input.type = 'file'; input.multiple = true; input.accept = 'audio/*'
-  input.onchange = async (e: any) => {
-    const files: File[] = Array.from(e.target.files)
-    const parsed: any[] = []
-    for (const f of files) {
-      let m: any = {}
-      try { m = await (await import('music-metadata-browser')).parseBlob(f) } catch {}
-      parsed.push({
-        id: f.name + Date.now(), name: m.common?.title || f.name.replace(/\.[^.]+$/,''),
-        artists: m.common?.artist ? [m.common.artist] : ['本地文件'],
-        album: m.common?.album || '本地音乐', duration: Math.round(m.format?.duration||0),
-        source: 'local', cover_url: '', file: f,
-        lyricist: m.common?.lyricist || '', composer: m.common?.composer || '',
-      })
+
+  try {
+    // 1. 选择音频文件（支持多选）
+    log('[scan] 打开文件选择对话框')
+    const result = await openFileDialog({
+      title: '选择音频文件',
+      multiple: true,
+      filters: [{
+        name: '音频文件',
+        extensions: ['mp3','flac','wav','m4a','ogg','wma','aac','ape','opus','m4p',
+                     'amr','aiff','alac','mp4','m4b','wv','tta','dff','dsf','mid','midi','ac3','webm']
+      }]
+    })
+    if (!result || (Array.isArray(result) && result.length === 0)) {
+      log('[scan] 用户取消了文件选择')
+      return
     }
-    songs.value = parsed
-    if (parsed.length) selectSong(parsed[0])
-    message.success(`已加载 ${parsed.length} 首`)
+    const allFiles: string[] = Array.isArray(result) ? result : [result]
+    log('[scan] 选择的文件:', allFiles)
+
+    if (allFiles.length === 0) {
+      log('[scan] 未选择文件')
+      return
+    }
+
+    message.info(`已选择 ${allFiles.length} 个文件，正在解析...`)
+
+    // 2. 解析音频文件
+    const { readFile } = await import(/* @vite-ignore */ '@tauri-apps/plugin-fs')
+    const { parseBlob } = await import('music-metadata-browser')
+    const parsed: any[] = []
+
+    for (const f of allFiles) {
+      try {
+        log('[scan] 读取文件:', f)
+        const data = await readFile(f)
+        const uint8Data = data instanceof Uint8Array ? data : new Uint8Array(data as any)
+        log('[scan] 文件大小:', uint8Data.length)
+
+        const blob = new Blob([uint8Data])
+        const m = await parseBlob(blob)
+        const fileName = f.split('/').pop() || f
+        const fileExt = fileName.split('.').pop()?.toLowerCase() || 'bin'
+
+        parsed.push({
+          id: fileName + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+          name: m.common?.title || fileName.replace(/\.[^.]+$/, ''),
+          artists: m.common?.artist ? [m.common.artist] : ['本地文件'],
+          album: m.common?.album || '本地音乐',
+          duration: Math.round(m.format?.duration || 0),
+          source: 'local',
+          cover_url: '',
+          file: blob,
+          fileExt,
+          filePath: f,
+          lyricist: m.common?.lyricist || '',
+          composer: m.common?.composer || '',
+        })
+
+        log('[scan] 解析成功:', fileName)
+      } catch (err: any) {
+        logError('[scan] 解析失败:', f, err.message || err)
+      }
+    }
+
+    log('[scan] 解析完成: 成功', parsed.length, '个')
+    await saveLog()
+
+    if (parsed.length === 0) {
+      message.warning('未发现可识别的音频文件')
+      return
+    }
+
+    const oldCount = songs.value.length
+    songs.value = [...songs.value, ...parsed]
+
+    if (oldCount === 0 && parsed.length > 0) {
+      selectSong(parsed[0])
+    }
+
+    message.success(`已添加 ${parsed.length} 首，共 ${songs.value.length} 首`)
+
+  } catch (err: any) {
+    logError('[scan] 扫描失败:', err)
+    await saveLog()
+    message.error('扫描失败：' + String(err.message || err))
   }
-  input.click()
 }
 
 // ── 歌词 ─────────────────────────
@@ -411,12 +468,26 @@ const showLyricPanel = ref(false)
 
 async function fetchLyricsForCurrent() {
   if (!currentSong.value) return
+  lyricData.value = { lyric: '' }
+  editForm.value.lyrics = ''
   try {
-    const r = await getLyrics(currentSong.value.id, currentSong.value.source, currentSong.value.name)
+    let r: { lyric: string; translated?: string; from?: string }
+    if (currentSong.value.source === 'local') {
+      // 本地歌曲：按歌名搜索歌词（不传无效 ID）
+      console.log('[lyrics] 本地歌曲，按歌名搜索:', currentSong.value.name)
+      r = await loadLyricsForLocal(currentSong.value.name, currentSong.value.artists?.[0])
+    } else {
+      r = await getLyrics(currentSong.value.id, currentSong.value.source, currentSong.value.name)
+    }
     lyricData.value = r
     editForm.value.lyrics = r.lyric || ''
+    console.log('[lyrics] 加载结果:', r.from, r.lyric ? `${r.lyric.length}字符` : '空')
     if (showLyricPanel.value) showLyricPanel.value = true
-  } catch {}
+  } catch (e: any) {
+    console.warn('[lyrics] 加载失败:', e)
+    lyricData.value = { lyric: '' }
+    editForm.value.lyrics = ''
+  }
 }
 
 async function showLyricFor(song: any) {
@@ -478,181 +549,78 @@ async function downloadCoverFor(song: any) {
   } catch (e: any) { message.error(`失败：${e}`) }
 }
 
-// ── 格式转换（FFmpeg WASM）───────
+// ── 格式转换（Rust + ffmpeg.exe）───────
 const convertTargetFormat = ref<'mp3' | 'wav' | 'ogg'>('mp3')
 const convertStates = ref<Record<string, {
   status: 'waiting' | 'converting' | 'done' | 'error'
   progress: number
   error?: string
 }>>({})
-const ffmpegLoading = ref(false)
-const ffmpegLoadError = ref('')
-let ffmpegInstance: any = null
-let abortCtrls = new Map<string, AbortController>()
 
 const selectedSongs = computed(() =>
-  songs.value.filter(s => selectedIds.value.has(s.id + '|' + s.source))
-)
+  songs.value.filter(s => selectedIds.value.has(s.id + '|' + s.source)))
 const convertingAny = computed(() =>
-  Object.values(convertStates.value).some(s => s.status === 'converting')
-)
-
-async function getFfmpeg() {
-  if (ffmpegInstance) return ffmpegInstance
-  if (ffmpegLoading.value) {
-    // 等待其他调用者完成加载
-    while (ffmpegLoading.value) {
-      await new Promise(r => setTimeout(r, 200))
-    }
-    if (ffmpegInstance) return ffmpegInstance
-    throw new Error(ffmpegLoadError.value || 'FFmpeg 加载失败')
-  }
-
-  ffmpegLoading.value = true
-  ffmpegLoadError.value = ''
-  try {
-    const { FFmpeg } = await import('@ffmpeg/ffmpeg')
-    const { toBlobURL } = await import('@ffmpeg/util')
-    const ffmpeg = new FFmpeg()
-
-    ffmpeg.on('log', ({ message: msg }) => {
-      console.log('[FFmpeg]', msg)
-    })
-
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd'
-
-    const timeoutMs = 60000
-    const loadPromise = ffmpeg.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-    })
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`加载超时（${timeoutMs / 1000}秒），请检查网络`)), timeoutMs)
-    )
-
-    await Promise.race([loadPromise, timeoutPromise])
-    ffmpegInstance = ffmpeg
-    message.success('FFmpeg 加载成功')
-    return ffmpeg
-  } catch (e: any) {
-    const errMsg = e?.message || String(e)
-    ffmpegLoadError.value = errMsg
-    message.error(`FFmpeg 加载失败：${errMsg}`)
-    console.error('[FFmpeg] 加载失败:', e)
-    throw e
-  } finally {
-    ffmpegLoading.value = false
-  }
-}
+  Object.values(convertStates.value).some(s => s.status === 'converting'))
+const hasConvertErrors = computed(() =>
+  Object.values(convertStates.value).some(s => s.status === 'error'))
 
 async function convertOneSong(song: any, outputExt: string): Promise<void> {
   const sid = song.id
-  const abortCtrl = new AbortController()
-  abortCtrls.set(sid, abortCtrl)
-
   convertStates.value[sid] = { status: 'converting', progress: 0 }
 
   try {
-    // 解包 Vue Proxy，避免污染原生对象
+    if (!isTauri) {
+      throw new Error('格式转换需要桌面版，请下载安装 Music Tool 桌面应用')
+    }
+
     const rawSong = toRaw(song)
-    const inputFile: File | Blob | undefined = rawSong.file
-    if (!inputFile) {
-      throw new Error('文件数据缺失，请重新扫描本地歌曲')
-    }
-    if ((inputFile as any).size === 0) {
-      throw new Error('文件大小为 0')
-    }
+    const inputPath: string | undefined = rawSong.filePath
+    if (!inputPath) throw new Error('文件路径丢失，请重新扫描本地歌曲')
 
-    const ffmpeg = await getFfmpeg()
-    if (abortCtrl.signal.aborted) throw new Error('已取消')
+    console.log(`[convert:${sid}] 开始，输入=${inputPath}，目标格式=${outputExt}`)
 
-    const { fetchFile } = await import('@ffmpeg/util')
-    const inputExt = inputFile instanceof File
-      ? inputFile.name.split('.').pop() || 'bin'
-      : 'bin'
-    const inputName = `in_${sid}.${inputExt}`
-    const outputName = `out_${sid}.${outputExt}`
+    // 1. 调用 Rust 命令（传文件路径，Rust 直接读文件）
+    convertStates.value[sid].progress = 30
+    const raw = await invoke('convert_audio', {
+      inputPath,
+      outputExt,
+    })
+    const outputBytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw as number[])
 
-    convertStates.value[sid].progress = 5
-    await ffmpeg.writeFile(inputName, await fetchFile(inputFile))
-    if (abortCtrl.signal.aborted) throw new Error('已取消')
+    if (!outputBytes || outputBytes.length === 0) throw new Error('转换返回为空')
+    console.log(`[convert:${sid}] 转换完成，输出大小=${outputBytes.length}`)
 
-    convertStates.value[sid].progress = 20
-    const args = ['-i', inputName, '-vn']
-    if (outputExt === 'mp3') {
-      args.push('-codec:a', 'libmp3lame', '-b:a', '320k')
-    } else if (outputExt === 'ogg') {
-      args.push('-codec:a', 'libvorbis', '-q:a', '4')
-    } else if (outputExt === 'wav') {
-      args.push('-codec:a', 'pcm_s16le')
-    }
-    args.push('-y', outputName)
-
-    const execPromise = ffmpeg.exec(args)
-    const execTimeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('转换超时（60秒）')), 60000)
-    )
-    await Promise.race([execPromise, execTimeout])
-    if (abortCtrl.signal.aborted) throw new Error('已取消')
-
+    // 2. 将输出二进制转为 Blob 并触发下载
     convertStates.value[sid].progress = 80
-    const data = await ffmpeg.readFile(outputName)
-    if (abortCtrl.signal.aborted) throw new Error('已取消')
+    const blob = new Blob([outputBytes as unknown as BlobPart], { type: `audio/${outputExt}` })
 
-    const uint8Data = data as Uint8Array
-    if (!uint8Data || uint8Data.length === 0) {
-      throw new Error('转换输出为空，可能是输入格式不支持')
-    }
-
-    const blob = new Blob([uint8Data.buffer as ArrayBuffer], { type: `audio/${outputExt}` })
     const newName = `${song.name}.${outputExt}`
     const u = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = u; a.download = newName; a.click()
     URL.revokeObjectURL(u)
 
-    // 清理虚拟文件系统
-    try { await ffmpeg.deleteFile(inputName) } catch { }
-    try { await ffmpeg.deleteFile(outputName) } catch { }
-
     convertStates.value[sid] = { status: 'done', progress: 100 }
     message.success(`${song.name} 转换完成`)
+
   } catch (e: any) {
-    if (e.message === '已取消' || abortCtrl.signal.aborted) {
-      convertStates.value[sid] = { status: 'waiting', progress: 0 }
-    } else {
-      const errMsg = e?.message || String(e)
-      convertStates.value[sid] = { status: 'error', progress: 0, error: errMsg.slice(0, 120) }
-      console.error('[convert]', e)
-      message.error(`${song.name} 转换失败：${errMsg.slice(0, 80)}`)
-    }
-  } finally {
-    abortCtrls.delete(sid)
+    const errMsg = e?.message || String(e)
+    convertStates.value[sid] = { status: 'error', progress: 0, error: errMsg.slice(0, 120) }
+    console.error(`[convert:${sid}] 失败:`, e)
+    message.error(`${song.name} 转换失败：${errMsg.slice(0, 80)}`)
   }
 }
 
 async function startConvertOne(song: any) {
-  if (ffmpegLoading.value) { message.warning('FFmpeg 加载中，请稍候'); return }
   await convertOneSong(song, convertTargetFormat.value)
 }
 
 async function startConvertAll() {
   if (selectedSongs.value.length === 0) { message.warning('请先选择歌曲'); return }
-  if (ffmpegLoading.value) { message.warning('FFmpeg 加载中，请稍候'); return }
   for (const song of selectedSongs.value) {
     if (convertStates.value[song.id]?.status === 'converting') continue
     await convertOneSong(song, convertTargetFormat.value)
   }
-}
-
-function stopConvert(songId: string) {
-  const ctrl = abortCtrls.get(songId)
-  if (ctrl) { ctrl.abort(); abortCtrls.delete(songId) }
-}
-
-function stopAllConvert() {
-  for (const [sid, ctrl] of abortCtrls) { ctrl.abort() }
-  abortCtrls.clear()
 }
 
 // ── 元数据编辑 ───────────────────
@@ -678,15 +646,17 @@ async function saveMetadata() {
   saving.value = true
   try {
     if (currentSong.value.source === 'local' && isTauri) {
-      const { invoke } = await import('@tauri-apps/api/core')
-      const tags: any = {}
-      if (editForm.value.title) tags.title = editForm.value.title
-      if (editForm.value.artist) tags.artist = editForm.value.artist
-      if (editForm.value.album) tags.album = editForm.value.album
-      if (editForm.value.lyricist) tags.lyricist = editForm.value.lyricist
-      if (editForm.value.composer) tags.composer = editForm.value.composer
-      if (editForm.value.lyrics) tags.unsynchronisedLyrics = [{ language: 'chi', text: editForm.value.lyrics }]
-      await invoke('write_meta_tags', { filePath: currentSong.value.file, tags })
+      const filePath = currentSong.value.filePath
+      if (!filePath) throw new Error('文件路径丢失，请重新扫描本地歌曲')
+      const metadata: any = {}
+      if (editForm.value.title) metadata.title = editForm.value.title
+      if (editForm.value.artist) metadata.artist = editForm.value.artist
+      if (editForm.value.album) metadata.album = editForm.value.album
+      metadata.year = null
+      metadata.genre = null
+      metadata.track_number = null
+      metadata.disc_number = null
+      await invoke('write_metadata', { filePath, metadata })
       message.success('元数据已写入文件')
     } else {
       Object.assign(currentSong.value, {
@@ -813,22 +783,10 @@ function saveSettings() {
   overflow:hidden;
 }
 .func-panel + .func-panel { margin-top:12px; }
-.panel-header {
-  display:flex; align-items:center; justify-content:space-between;
-  padding:10px 16px; border-bottom:1px solid #F0F3F6;
-}
 .panel-header-actions { display:flex; gap:6px; }
 .panel-body { padding:16px; }
 
 /* 格式转换 */
-.upload-zone {
-  border:2px dashed #D1D5DB; border-radius:12px; padding:32px;
-  text-align:center; cursor:pointer; transition:all 0.2s;
-  &:hover { border-color:#4ECDC4; background:rgba(78,205,196,0.03); }
-  p { margin-top:8px; color:#6B7280; font-size:14px; }
-  .hint { font-size:12px; color:#9CA3AF; }
-  .upload-icon { color:#4ECDC4; }
-}
 .convert-config { margin-top:16px; }
 .format-picker { display:flex; align-items:center; gap:10px; margin-bottom:12px; font-size:13px; color:#374151; }
 .file-rows { max-height:180px; overflow-y:auto; margin-bottom:12px; }
@@ -843,13 +801,10 @@ function saveSettings() {
 .convert-empty { padding:20px; }
 .panel-subtitle { font-size:12px; color:#9CA3AF; font-weight:400; }
 .convert-actions-top { display:flex; gap:8px; margin-bottom:12px; }
-.fprogress { display:flex; align-items:center; min-width:80px; justify-content:flex-end; }
-.factions { display:flex; gap:4px; min-width:50px; justify-content:flex-end; }
-.ffmpeg-error { margin-bottom:12px; }
-.error-box {
-  background:#FEF2F2; border:1px solid #FECACA; border-radius:8px;
-  padding:10px 14px; font-size:13px; color:#B91C1C; line-height:1.5;
-}
+.f-progress { display:flex; align-items:center; min-width:80px; justify-content:flex-end; }
+.f-actions { display:flex; gap:4px; min-width:50px; justify-content:flex-end; }
+.convert-errors { margin-top:8px; }
+.error-item { font-size:12px; color:#EF4444; padding:4px 0; border-bottom:1px solid #FEE2E2; }
 
 /* 歌词管理 */
 .lyric-preview { }
