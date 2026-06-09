@@ -1953,6 +1953,7 @@ dependencies = [
 name = "music-tool-v2"
 version = "1.0.0"
 dependencies = [
+ "encoding_rs",
  "lofty",
  "serde",
  "serde_json",

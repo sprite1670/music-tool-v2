@@ -75,24 +75,8 @@
         </div>
       </aside>
 
-      <!-- 右栏：歌曲详情 + 功能面板 -->
+      <!-- 右栏：功能面板 -->
       <section class="right-panel">
-        <!-- 歌曲详情卡片 -->
-        <div v-if="currentSong" class="detail-card">
-          <div class="detail-cover">
-            <img v-if="currentSong.cover_url" :src="currentSong.cover_url" class="cover-img"/>
-            <div v-else class="cover-placeholder">♪</div>
-          </div>
-          <div class="detail-info">
-            <h3>{{ currentSong.name }}</h3>
-            <p class="artist">{{ currentSong.artists?.join(', ') }}</p>
-            <p class="album">{{ currentSong.album || '-' }}</p>
-          </div>
-        </div>
-        <div v-else class="detail-placeholder">
-          <n-empty description="选择歌曲查看详情"/>
-        </div>
-
         <!-- 功能按钮区 -->
         <div class="function-bar">
           <n-button
@@ -123,11 +107,9 @@
           <span class="selected-count" v-if="selectedIds.size > 0">已选 {{ selectedIds.size }} 首</span>
         </div>
 
-        <!-- 可折叠功能面板 -->
-        <div class="function-panels">
-
-          <!-- 格式转换面板 -->
-          <div v-show="activePanel === 'convert'" class="func-panel">
+        <!-- 合并面板：转换 + 歌词 -->
+        <div v-show="activePanel === 'convert' || activePanel === 'lyrics'" class="func-panel">
+            <!-- 格式转换区块 -->
             <div class="panel-header">
               <span class="panel-title">🔄 格式转换</span>
               <span class="panel-subtitle">使用左侧歌曲库中已选中的歌曲</span>
@@ -147,14 +129,17 @@
                 </div>
                 <div class="convert-actions-top">
                   <n-button size="small" :disabled="convertingAny" @click="startConvertAll">全部转换</n-button>
+                  <span v-if="convertProgressText" class="convert-progress-text">{{ convertProgressText }}</span>
                 </div>
                 <div class="file-rows">
                   <div v-for="song in selectedSongs" :key="song.id" class="file-row">
                     <span class="fname">{{ song.name }}</span>
                     <div class="f-progress">
-                      <n-progress v-if="convertStates[song.id]?.status === 'converting'"
-                                      type="line" :percentage="convertStates[song.id]?.progress || 0"
-                                      :show-indicator="false" :height="4" style="width:80px;"/>
+                      <template v-if="convertStates[song.id]?.status === 'converting'">
+                        <n-progress type="line" :percentage="convertStates[song.id]?.progress || 0"
+                                      :height="4" style="width:80px;" :show-indicator="false"/>
+                        <span class="progress-val">{{ convertStates[song.id]?.progress || 0 }}%</span>
+                      </template>
                       <span v-else :class="['fstatus',
                         convertStates[song.id]?.status === 'done' ? 'done' :
                         convertStates[song.id]?.status === 'error' ? 'fail' : '']">
@@ -177,10 +162,10 @@
                 </div>
               </div>
             </div>
-          </div>
 
-          <!-- 歌词管理面板 -->
-          <div v-show="activePanel === 'lyrics'" class="func-panel">
+            <!-- 分隔线 + 歌词管理区块 -->
+            <n-divider style="margin:0"/>
+
             <div class="panel-header">
               <span class="panel-title">📝 歌词管理</span>
               <div class="panel-header-actions">
@@ -223,6 +208,14 @@
           <div v-show="activePanel === 'metadata'" class="func-panel">
             <div class="panel-header">
               <span class="panel-title">✏️ 元数据编辑</span>
+              <div class="panel-header-actions">
+                <n-button size="tiny" secondary :loading="fetchingMetadata" @click="fetchMetadataFromNetwork">
+                  自动填写
+                </n-button>
+                <n-button size="tiny" secondary :loading="batchMetaLoading" @click="batchFetchMetadata">
+                  批量自动填写
+                </n-button>
+              </div>
             </div>
             <div class="panel-body">
               <div v-if="currentSong" class="metadata-form-area">
@@ -250,7 +243,6 @@
               </div>
             </div>
           </div>
-        </div>
       </section>
     </main>
 
@@ -397,9 +389,35 @@ async function scanLocalSongs() {
 
     message.info(`已选择 ${allFiles.length} 个文件，正在解析...`)
 
+    // 从文件名解析歌名和歌手（后备）
+    function parseNameFromFileName(name: string): { name: string; artist: string } {
+      const base = name.replace(/\.[^.]+$/, '')
+      const parts = base.split(/\s+/)
+      if (parts.length >= 2) {
+        return { name: parts[0], artist: parts.slice(1).join(' ') }
+      }
+      return { name: base, artist: '本地文件' }
+    }
+    // 判断标签是否被人为篡改/损坏
+    function isBadMetadata(meta: any): boolean {
+      const title = (meta.title || '') as string
+      const artist = (meta.artist || '') as string
+      // 包含大量问号或替换字符
+      if ((title.match(/\?/g) || []).length >= 2) return true
+      if ((artist.match(/\?/g) || []).length >= 2) return true
+      if (title.includes('\uFFFD')) return true
+      if (artist.includes('\uFFFD')) return true
+      // 包含明显异常的标记文本（平台篡改标签常见内容）
+      const badKeywords = ['账号已注销', 'fuklotyo', '茶北', 'ciper']
+      const combined = (title + ' ' + artist).toLowerCase()
+      for (const kw of badKeywords) {
+        if (combined.includes(kw.toLowerCase())) return true
+      }
+      return false
+    }
+
     // 2. 解析音频文件
     const { readFile } = await import(/* @vite-ignore */ '@tauri-apps/plugin-fs')
-    const { parseBlob } = await import('music-metadata-browser')
     const parsed: any[] = []
 
     for (const f of allFiles) {
@@ -410,23 +428,39 @@ async function scanLocalSongs() {
         log('[scan] 文件大小:', uint8Data.length)
 
         const blob = new Blob([uint8Data])
-        const m = await parseBlob(blob)
-        const fileName = f.split('/').pop() || f
+        const fileName = f.replace(/\\/g, '/').split('/').pop() || f
         const fileExt = fileName.split('.').pop()?.toLowerCase() || 'bin'
+
+        // 用 Rust 后端读取元数据（支持 GBK 编码）
+        let meta: any = {}
+        try {
+          meta = await invoke('read_metadata', { filePath: f })
+          log('[scan] 元数据:', JSON.stringify(meta))
+        } catch (metaErr: any) {
+          logError('[scan] 读取元数据失败:', f, metaErr.message || metaErr)
+          meta = {}
+        }
+
+        // 如果标签被篡改/异常，回退到文件名解析
+        const fromFile = parseNameFromFileName(fileName)
+        const useFileName = isBadMetadata(meta)
+        if (useFileName) {
+          log('[scan] 标签异常，使用文件名解析:', fileName, '=>', fromFile.name, fromFile.artist)
+        }
 
         parsed.push({
           id: fileName + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-          name: m.common?.title || fileName.replace(/\.[^.]+$/, ''),
-          artists: m.common?.artist ? [m.common.artist] : ['本地文件'],
-          album: m.common?.album || '本地音乐',
-          duration: Math.round(m.format?.duration || 0),
+          name: useFileName ? fromFile.name : (meta.title || fromFile.name),
+          artists: useFileName ? [fromFile.artist] : (meta.artist ? [meta.artist] : [fromFile.artist]),
+          album: meta.album || '本地音乐',
+          duration: Math.round(meta.duration || 0),
           source: 'local',
           cover_url: '',
           file: blob,
           fileExt,
           filePath: f,
-          lyricist: m.common?.lyricist || '',
-          composer: m.common?.composer || '',
+          lyricist: meta.lyricist || '',
+          composer: meta.composer || '',
         })
 
         log('[scan] 解析成功:', fileName)
@@ -505,6 +539,28 @@ async function loadLyricsForCurrent() {
   } catch (e: any) { message.error(`失败：${e}`) }
 }
 
+// 清理文件名：只保留中文、英文、数字，其余删掉（含空格）
+function cleanFileName(name: string): string {
+  return name.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '')
+}
+
+// 保存歌词到原文件所在文件夹
+async function saveLyricsToFile(song: any, lyricContent: string) {
+  const rawName = song.name || '未知歌曲'
+  const cleanName = cleanFileName(rawName)
+  const fileName = cleanName + '.lrc'
+  if (song.filePath && isTauri) {
+    try {
+      await invoke('save_lyrics_file', { filePath: song.filePath, content: lyricContent, fileName })
+    } catch (e: any) {
+      console.warn('[lyrics] 保存到原文件夹失败，改用浏览器下载:', e)
+      downloadBlob(lyricContent, fileName)
+    }
+  } else {
+    downloadBlob(lyricContent, fileName)
+  }
+}
+
 function downloadBlob(content: string, filename: string) {
   const b = new Blob([content], { type: 'text/plain;charset=utf-8' })
   const u = URL.createObjectURL(b)
@@ -517,24 +573,52 @@ async function downloadLyricsForCurrent() {
   if (!editForm.value.lyrics) await fetchLyricsForCurrent()
   const t = editForm.value.lyrics
   if (!t) { message.warning('暂无歌词'); return }
-  downloadBlob(t, `${currentSong.value.name} - ${currentSong.value.artists?.[0]||'未知'}.lrc`)
-  message.success('歌词已下载')
+  await saveLyricsToFile(currentSong.value, t)
+  message.success('歌词已保存至原文件夹')
 }
 
-// ── 批量下载歌词 ─────────────────
+// ── 批量下载歌词（显示进度，保存到原文件夹）─────────────────
+const batchLyricProgress = ref('')
 async function batchDownloadLyrics() {
   const sel = songs.value.filter(s => selectedIds.value.has(s.id+'|'+s.source))
   if (!sel.length) return
   message.info(`正在下载 ${sel.length} 首歌词...`)
   let ok = 0
-  for (const s of sel) {
+  let fail = 0
+  const failedNames: string[] = []
+  for (let i = 0; i < sel.length; i++) {
+    const s = sel[i]
+    batchLyricProgress.value = `${i+1}/${sel.length}`
     try {
-      const r = await getLyrics(s.id, s.source, s.name)
-      if (r.lyric) { downloadBlob(r.lyric, `${s.name} - ${s.artists?.[0]||'未知'}.lrc`); ok++ }
-    } catch {}
-    await new Promise(r => setTimeout(r, 600))
+      let r: { lyric: string; translated?: string; from?: string }
+      if (s.source === 'local') {
+        r = await loadLyricsForLocal(s.name, s.artists?.[0])
+      } else {
+        r = await getLyrics(s.id, s.source, s.name)
+      }
+      if (r.lyric) {
+        await saveLyricsToFile(s, r.lyric)
+        ok++
+      } else {
+        fail++
+        failedNames.push(s.name)
+        console.warn(`[batchLyrics] 未找到歌词: ${s.name}`)
+      }
+    } catch (e) {
+      fail++
+      failedNames.push(s.name)
+      console.warn(`[batchLyrics] 下载失败: ${s.name}`, e)
+    }
+    await new Promise(r => setTimeout(r, 300))
   }
-  message.success(`已完成 ${ok}/${sel.length} 首`)
+  batchLyricProgress.value = ''
+  if (fail > 0) {
+    const showNames = failedNames.slice(0, 5).join('、')
+    const more = failedNames.length > 5 ? ` 等 ${failedNames.length} 首` : ''
+    message.warning(`${ok}/${sel.length} 首完成，失败：${showNames}${more}`)
+  } else {
+    message.success(`已完成 ${ok}/${sel.length} 首`)
+  }
 }
 
 // ── 封面下载 ─────────────────────
@@ -563,6 +647,14 @@ const convertingAny = computed(() =>
   Object.values(convertStates.value).some(s => s.status === 'converting'))
 const hasConvertErrors = computed(() =>
   Object.values(convertStates.value).some(s => s.status === 'error'))
+const convertProgressText = computed(() => {
+  const total = selectedSongs.value.length
+  if (total === 0) return ''
+  const done = Object.values(convertStates.value).filter(s => s.status === 'done').length
+  const converting = Object.values(convertStates.value).filter(s => s.status === 'converting').length
+  if (converting > 0) return `转换中 ${done}/${total}`
+  return done === total ? `全部完成 ${done}/${total}` : `就绪 ${done}/${total}`
+})
 
 async function convertOneSong(song: any, outputExt: string): Promise<void> {
   const sid = song.id
@@ -625,6 +717,8 @@ async function startConvertAll() {
 
 // ── 元数据编辑 ───────────────────
 const saving = ref(false)
+const fetchingMetadata = ref(false)
+const batchMetaLoading = ref(false)
 const showMetaPanel = ref(false)
 
 function openMetadataEditor() {
@@ -639,6 +733,54 @@ function openMetadataEditor() {
   }
   showMetaPanel.value = true
   activePanel.value = 'metadata'
+}
+
+async function fetchMetadataFromNetwork() {
+  if (!currentSong.value) return
+  fetchingMetadata.value = true
+  try {
+    const keyword = currentSong.value.name || ''
+    if (!keyword) throw new Error('歌曲名称为空')
+
+    message.info('正在从网络搜索元数据...')
+    const results = await searchMusic(keyword, 'all')
+    if (!results || results.length === 0) {
+      message.warning('未找到匹配的元数据')
+      return
+    }
+
+    // 取第一个结果
+    const r = results[0]
+    console.log('[metadata] 自动填写，来源:', r.source, r.name)
+
+    // 填写表单
+    editForm.value.title = r.name || currentSong.value.name || ''
+    editForm.value.artist = (r.artists || []).join(', ')
+    editForm.value.album = r.album || ''
+
+    // 更新封面 URL
+    if (r.cover_url) {
+      currentSong.value.cover_url = r.cover_url
+    }
+
+    // 尝试获取歌词并填写
+    try {
+      const lyricsResult = await getLyrics(r.id, r.source, r.name)
+      if (lyricsResult?.lyric) {
+        editForm.value.lyrics = lyricsResult.lyric
+        message.success(`元数据已填写（${r.source}），歌词已加载`)
+      } else {
+        message.success(`元数据已填写（${r.source}）`)
+      }
+    } catch (lyricErr) {
+      message.success(`元数据已填写（${r.source}）`)
+    }
+  } catch (e: any) {
+    message.error(`自动填写失败：${e?.message || e}`)
+    console.error('[metadata] 自动填写失败:', e)
+  } finally {
+    fetchingMetadata.value = false
+  }
 }
 
 async function saveMetadata() {
@@ -670,6 +812,106 @@ async function saveMetadata() {
     }
   } catch (e: any) { message.error(`保存失败：${e}`) }
   finally { saving.value = false }
+}
+
+// ── 批量自动填写元数据并自动保存 ─────────
+async function batchFetchMetadata() {
+  const sel = songs.value.filter(s => selectedIds.value.has(s.id+'|'+s.source))
+  if (!sel.length) { message.warning('请先选择歌曲'); return }
+  batchMetaLoading.value = true
+  let ok = 0
+  let fail = 0
+  const failedNames: string[] = []
+  try {
+    for (let i = 0; i < sel.length; i++) {
+      const s = sel[i]
+      try {
+        // 优先用 s.name 搜索；如果 s.name 异常（???等），回退到文件名
+        let searchKey = s.name || ''
+        const badPattern = /\?{2,}|账号已注销|fuklotyo/i
+        if (!searchKey || badPattern.test(searchKey)) {
+          // 从 filePath 提取文件名作为搜索关键词
+          if (s.filePath) {
+            const fn = s.filePath.replace(/\\/g, '/').split('/').pop() || ''
+            searchKey = fn.replace(/\.[^.]+$/, '')
+          }
+        }
+        console.log(`[batchMeta] 搜索: "${searchKey}"`)
+        const results = await searchMusic(searchKey, 'all')
+        if (!results || results.length === 0) {
+          // 尝试用艺术家名搜索
+          if (s.artists && s.artists.length && s.artists[0] !== '本地文件') {
+            const key2 = `${searchKey} ${s.artists[0]}`
+            console.log(`[batchMeta] 重试搜索: "${key2}"`)
+            const results2 = await searchMusic(key2, 'all')
+            if (results2 && results2.length > 0) {
+              const r = results2[0]
+              const metadata: any = {}
+              if (r.name) metadata.title = r.name
+              if (r.artists && r.artists.length) metadata.artist = r.artists.join(', ')
+              if (r.album) metadata.album = r.album
+              metadata.year = null
+              metadata.genre = null
+              metadata.track_number = null
+              metadata.disc_number = null
+              if (s.filePath && isTauri) {
+                await invoke('write_metadata', { filePath: s.filePath, metadata })
+              }
+              s.name = r.name || s.name
+              s.artists = r.artists || s.artists
+              s.album = r.album || s.album
+              ok++
+              console.log(`[batchMeta] 已保存(重试): ${s.name}`)
+              continue
+            }
+          }
+          fail++
+          failedNames.push(s.name || s.filePath || '未知')
+          console.warn(`[batchMeta] 未找到: ${searchKey}`)
+          continue
+        }
+        const r = results[0]
+        const metadata: any = {}
+        if (r.name) metadata.title = r.name
+        if (r.artists && r.artists.length) metadata.artist = r.artists.join(', ')
+        if (r.album) metadata.album = r.album
+        metadata.year = null
+        metadata.genre = null
+        metadata.track_number = null
+        metadata.disc_number = null
+        // 自动保存到文件
+        if (s.filePath && isTauri) {
+          try {
+            await invoke('write_metadata', { filePath: s.filePath, metadata })
+            console.log(`[batchMeta] 已保存: ${r.name}`)
+          } catch (writeErr: any) {
+            console.warn(`[batchMeta] 保存失败: ${r.name}`, writeErr)
+            // 保存失败不算完全失败，至少更新内存
+          }
+        }
+        // 更新内存中的歌曲对象
+        s.name = r.name || s.name
+        s.artists = r.artists || s.artists
+        s.album = r.album || s.album
+        ok++
+      } catch (e) {
+        fail++
+        failedNames.push(s.name || s.filePath || '未知')
+        console.warn(`[batchMeta] 失败: ${s.name}`, e)
+      }
+    }
+    if (fail > 0) {
+      const showNames = failedNames.slice(0, 5).join('、')
+      const more = failedNames.length > 5 ? ` 等 ${failedNames.length} 首` : ''
+      message.warning(`批量填写完成：${ok} 成功，${fail} 失败：${showNames}${more}`)
+    } else {
+      message.success(`批量填写完成：${ok} 首全部成功`)
+    }
+  } catch (e: any) {
+    message.error(`批量填写出错：${e?.message || e}`)
+  } finally {
+    batchMetaLoading.value = false
+  }
 }
 
 // ── 设置 ─────────────────────────
@@ -746,27 +988,6 @@ function saveSettings() {
   padding:16px 20px; gap:12px;
 }
 
-/* 歌曲详情卡片 */
-.detail-card {
-  display:flex; align-items:center; gap:16px;
-  background:#FFF; border-radius:12px; padding:16px 20px;
-  border:1px solid #E1E8ED; flex-shrink:0;
-}
-.detail-cover { flex-shrink:0; }
-.cover-img { width:64px; height:64px; border-radius:8px; object-fit:cover; }
-.cover-placeholder {
-  width:64px; height:64px; border-radius:8px;
-  display:flex; align-items:center; justify-content:center;
-  background:linear-gradient(135deg,#EEF2F7,#F7F9FC); font-size:24px; color:#9CA3AF;
-}
-.detail-info { flex:1; min-width:0; }
-.detail-info h3 { font-size:15px; font-weight:700; color:#1A1A2E; margin:0 0 4px; }
-.detail-info .artist { font-size:13px; color:#6B7280; margin:0 0 2px; }
-.detail-info .album { font-size:12px; color:#9CA3AF; margin:0; }
-.detail-actions { display:flex; gap:8px; flex-shrink:0; }
-
-.detail-placeholder { flex-shrink:0; padding:20px; }
-
 /* 功能按钮栏 */
 .function-bar {
   display:flex; align-items:center; gap:8px; flex-shrink:0;
@@ -800,8 +1021,10 @@ function saveSettings() {
 .fstatus.fail { color:#EF4444; }
 .convert-empty { padding:20px; }
 .panel-subtitle { font-size:12px; color:#9CA3AF; font-weight:400; }
-.convert-actions-top { display:flex; gap:8px; margin-bottom:12px; }
-.f-progress { display:flex; align-items:center; min-width:80px; justify-content:flex-end; }
+.convert-actions-top { display:flex; gap:8px; margin-bottom:12px; align-items:center; }
+.convert-progress-text { font-size:12px; color:#4ECDC4; font-weight:600; }
+.f-progress { display:flex; align-items:center; min-width:80px; justify-content:flex-end; gap:4px; }
+.progress-val { font-size:11px; color:#4ECDC4; font-weight:600; min-width:32px; text-align:right; }
 .f-actions { display:flex; gap:4px; min-width:50px; justify-content:flex-end; }
 .convert-errors { margin-top:8px; }
 .error-item { font-size:12px; color:#EF4444; padding:4px 0; border-bottom:1px solid #FEE2E2; }
